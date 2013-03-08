@@ -47,7 +47,7 @@ payload = Payload(alert="Hello World!", custom={'sekrit_number':123})
 
 ## Credits
 
-Written and maintained by Simon Whitaker at [Goo Software Ltd][goo].
+Written and maintained by Simon Whitaker at [Goo Software Ltd][goo] and tornado it by kernel1983.
 
 [a1]:http://developer.apple.com/iphone/library/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/Introduction/Introduction.html#//apple_ref/doc/uid/TP40008194-CH1-SW1
 [goo]:http://www.goosoftware.co.uk/
