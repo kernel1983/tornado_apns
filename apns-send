@@ -41,11 +41,11 @@ if options.message is None:
 apns = APNs(cert_file=options.certificate_file, key_file=options.key_file, use_sandbox=True)
 
 def success():
-  print("Sent push message to APNS gateway.")
-  ioloop.IOLoop.instance().stop()
+    print("Sent push message to APNS gateway.")
+    ioloop.IOLoop.instance().stop()
 
 def send():
-	apns.gateway_server.send_notification(options.push_token, payload, success)
+    apns.gateway_server.send_notification(options.push_token, payload, success)
 
 # Send a notification
 payload = Payload(alert=options.message, sound="default", badge=1)
