@@ -25,6 +25,7 @@
 
 from binascii import a2b_hex, b2a_hex
 from datetime import datetime
+import time
 from socket import socket, AF_INET, SOCK_STREAM
 from struct import pack, unpack
 
@@ -39,8 +40,10 @@ except ImportError:
     import simplejson as json
 
 from tornado import iostream
+from tornado import ioloop
 
 MAX_PAYLOAD_LENGTH = 256
+TIME_OUT = 20
 
 class APNs(object):
     """A class representing an Apple Push Notification service connection"""
@@ -118,25 +121,55 @@ class APNsConnection(object):
         self._socket = None
         self._ssl = None
         self._stream = None
+        self._alive = False
+        self._connecting = False
+        self._connect_timeout = None
 
     def __del__(self):
         self._disconnect();
+    
+    def is_alive(self):
+        return self._alive
 
-    def connect(self, callback):
+    def connect(self):
         # Establish an SSL connection
-        self._socket = socket(AF_INET, SOCK_STREAM)
-        self._stream = iostream.SSLIOStream(socket=self._socket, ssl_options={"keyfile": self.key_file, "certfile": self.cert_file})
-        self._stream.connect((self.server, self.port), callback)
+        if not self._connecting:
+            self._connecting = True
+            _ioloop = ioloop.IOLoop.instance()
+            self._connect_timeout = _ioloop.add_timeout(time.time()+TIME_OUT,
+                    self._connecting_timeout_callback)
+            self._socket = socket(AF_INET, SOCK_STREAM)
+            self._stream = iostream.SSLIOStream(socket=self._socket, ssl_options={"keyfile": self.key_file, "certfile": self.cert_file})
+            self._stream.connect((self.server, self.port), self._on_connected)
+
+    def _connecting_timeout_callback(self):
+        if not self._alive:
+            self._connecting = False
+            self._disconnect()
+
+    def _on_connected(self):
+        ioloop.IOLoop.instance().remove_timeout(self._connect_timeout)
+        self._alive = True
+        self._connecting = False
 
     def _disconnect(self):
         if self._socket:
+            self._alive = False
             self._socket.close()
 
     def read(self, n, callback):
-        return self._stream.read(n, callback)
+        try:
+            self._stream.read(n, callback)
+        except AttributeError as e:
+            self._alive = False
+            raise e
 
     def write(self, string, callback):
-        return self._stream.write(string, callback)
+        try:
+            self._stream.write(string, callback)
+        except AttributeError as e:
+            self._alive = False
+            raise e
 
 
 class PayloadAlert(object):
