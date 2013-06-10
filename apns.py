@@ -167,9 +167,9 @@ class APNsConnection(object):
     def write(self, string, callback):
         try:
             self._stream.write(string, callback)
-        except AttributeError as e:
+        except (AttributeError, IOError) as e:
             self._alive = False
-            raise e
+            raise ConnectionError('%s' % e)
 
 
 class PayloadAlert(object):
@@ -197,6 +197,12 @@ class PayloadAlert(object):
 class PayloadTooLargeError(Exception):
     def __init__(self):
         super(PayloadTooLargeError, self).__init__()
+
+class TokenLengthOddError(Exception):
+    pass
+
+class ConnectionError(Exception):
+    pass
 
 class Payload(object):
     """A class representing an APNs message payload"""
@@ -310,7 +316,10 @@ class GatewayConnection(APNsConnection):
         Takes a token as a hex string and a payload as a Python dict and sends
         the notification
         """
-        token_bin = a2b_hex(token_hex)
+        try:
+            token_bin = a2b_hex(token_hex)
+        except TypeError as e:
+            raise TokenLengthOddError("Token Length is Odd")
         token_length_bin = APNs.packed_ushort_big_endian(len(token_bin))
         payload_json = payload.json()
         payload_length_bin = APNs.packed_ushort_big_endian(len(payload_json))
@@ -322,4 +331,19 @@ class GatewayConnection(APNsConnection):
 
     def send_notification(self, token_hex, payload, callback):
         self.write(self._get_notification(token_hex, payload), callback)
+
+    def send_notification_json(self, token_hex, payload, callback):
+
+        token_bin = a2b_hex(token_hex)
+        except TypeError as e:
+            raise TokenLengthOddError("Token Length is Odd")
+        token_length_bin = APNs.packed_ushort_big_endian(len(token_bin))
+        payload_json = payload
+        payload_length_bin = APNs.packed_ushort_big_endian(len(payload_json))
+
+        notification = ('\0' + token_length_bin + token_bin
+            + payload_length_bin + payload_json)
+
+        self.write(notification, callback)
+
 
