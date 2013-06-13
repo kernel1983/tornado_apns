@@ -28,6 +28,7 @@ from datetime import datetime
 import time
 from socket import socket, AF_INET, SOCK_STREAM
 from struct import pack, unpack
+import functools
 
 try:
     from ssl import wrap_socket
@@ -41,6 +42,7 @@ except ImportError:
 
 from tornado import iostream
 from tornado import ioloop
+from tornado import gen
 
 MAX_PAYLOAD_LENGTH = 256
 TIME_OUT = 20
@@ -131,7 +133,10 @@ class APNsConnection(object):
     def is_alive(self):
         return self._alive
 
-    def connect(self):
+    def is_connecting(self):
+        return self._connecting
+
+    def connect(self, callback):
         # Establish an SSL connection
         if not self._connecting:
             self._connecting = True
@@ -140,35 +145,39 @@ class APNsConnection(object):
                     self._connecting_timeout_callback)
             self._socket = socket(AF_INET, SOCK_STREAM)
             self._stream = iostream.SSLIOStream(socket=self._socket, ssl_options={"keyfile": self.key_file, "certfile": self.cert_file})
-            self._stream.connect((self.server, self.port), self._on_connected)
+            self._stream.connect((self.server, self.port),
+                    functools.partial(self._on_connected, callback))
 
     def _connecting_timeout_callback(self):
         if not self._alive:
             self._connecting = False
             self._disconnect()
 
-    def _on_connected(self):
+    def _on_connected(self, callback):
         ioloop.IOLoop.instance().remove_timeout(self._connect_timeout)
         self._alive = True
         self._connecting = False
+        callback()
 
     def _disconnect(self):
+        self._alive = False
         if self._socket:
-            self._alive = False
             self._socket.close()
 
     def read(self, n, callback):
         try:
-            self._stream.read(n, callback)
-        except AttributeError as e:
+            self._stream.read_bytes(n, callback)
+        except (AttributeError, IOError) as e:
             self._alive = False
-            raise e
+            self._disconnect()
+            raise ConnectionError('%s' % e)
 
     def write(self, string, callback):
         try:
             self._stream.write(string, callback)
         except (AttributeError, IOError) as e:
             self._alive = False
+            self._disconnect()
             raise ConnectionError('%s' % e)
 
 
@@ -332,18 +341,27 @@ class GatewayConnection(APNsConnection):
     def send_notification(self, token_hex, payload, callback):
         self.write(self._get_notification(token_hex, payload), callback)
 
-    def send_notification_json(self, token_hex, payload, callback):
-
-        token_bin = a2b_hex(token_hex)
+    def send_notification_json(self, identifier, expiry, token_hex, payload, callback):
+        
+        try:
+            token_bin = a2b_hex(token_hex)
         except TypeError as e:
             raise TokenLengthOddError("Token Length is Odd")
         token_length_bin = APNs.packed_ushort_big_endian(len(token_bin))
+        identifier_bin = APNs.packed_uint_big_endian(identifier)
+        expiry = APNs.packed_uint_big_endian(expiry)
         payload_json = payload
         payload_length_bin = APNs.packed_ushort_big_endian(len(payload_json))
-
-        notification = ('\0' + token_length_bin + token_bin
+        
+        notification = ('\1' + identifier_bin + expiry + token_length_bin + token_bin
             + payload_length_bin + payload_json)
 
         self.write(notification, callback)
-
-
+    
+    @gen.engine
+    def receive_response(self, callback):
+        data = yield gen.Task(self.read, 6)
+        command = unpack('>B', data[0:1])[0]
+        status = unpack('>B', data[1:2])[0]
+        seq = APNs.unpacked_uint_big_endian(data[2:6])
+        callback(status, seq)
