@@ -42,6 +42,7 @@ except ImportError:
 
 from tornado import iostream
 from tornado import ioloop
+from tornado import gen
 
 MAX_PAYLOAD_LENGTH = 256
 TIME_OUT = 20
@@ -132,6 +133,9 @@ class APNsConnection(object):
     def is_alive(self):
         return self._alive
 
+    def is_connecting(self):
+        return self._connecting
+
     def connect(self, callback):
         # Establish an SSL connection
         if not self._connecting:
@@ -162,7 +166,7 @@ class APNsConnection(object):
 
     def read(self, n, callback):
         try:
-            self._stream.read(n, callback)
+            self._stream.read_bytes(n, callback)
         except (AttributeError, IOError) as e:
             self._disconnect()
             raise ConnectionError('%s' % e)
@@ -200,6 +204,12 @@ class PayloadAlert(object):
 class PayloadTooLargeError(Exception):
     def __init__(self):
         super(PayloadTooLargeError, self).__init__()
+
+class TokenLengthOddError(Exception):
+    pass
+
+class ConnectionError(Exception):
+    pass
 
 class Payload(object):
     """A class representing an APNs message payload"""
@@ -308,21 +318,53 @@ class GatewayConnection(APNsConnection):
             'gateway.sandbox.push.apple.com')[use_sandbox]
         self.port = 2195
 
-    def _get_notification(self, token_hex, payload):
+    def _get_notification(self, identifier, expiry, token_hex, payload):
         """
         Takes a token as a hex string and a payload as a Python dict and sends
         the notification
         """
-        token_bin = a2b_hex(token_hex)
+        try:
+            token_bin = a2b_hex(token_hex)
+        except TypeError as e:
+            raise TokenLengthOddError("Token Length is Odd")
         token_length_bin = APNs.packed_ushort_big_endian(len(token_bin))
+        identifier_bin = APNs.packed_uint_big_endian(identifier)
+        expiry = APNs.packed_uint_big_endian(expiry)
         payload_json = payload.json()
         payload_length_bin = APNs.packed_ushort_big_endian(len(payload_json))
 
-        notification = ('\0' + token_length_bin + token_bin
+        notification = ('\1' + identifier_bin + expiry + token_length_bin + token_bin
             + payload_length_bin + payload_json)
 
         return notification
 
-    def send_notification(self, token_hex, payload, callback):
+    def send_notification(self, identifier, expiry, token_hex, payload, callback):
         self.write(self._get_notification(token_hex, payload), callback)
 
+    def send_notification_json(self, identifier, expiry, token_hex, payload, callback):
+        
+        try:
+            token_bin = a2b_hex(token_hex)
+        except TypeError as e:
+            raise TokenLengthOddError("Token Length is Odd")
+        token_length_bin = APNs.packed_ushort_big_endian(len(token_bin))
+        identifier_bin = APNs.packed_uint_big_endian(identifier)
+        expiry = APNs.packed_uint_big_endian(expiry)
+        payload_json = payload
+        payload_length_bin = APNs.packed_ushort_big_endian(len(payload_json))
+        
+        notification = ('\1' + identifier_bin + expiry + token_length_bin + token_bin
+            + payload_length_bin + payload_json)
+
+        self.write(notification, callback)
+    
+    @gen.engine
+    def receive_response(self, callback):
+        '''
+        receive the error response, return the error status and seq id
+        '''
+        data = yield gen.Task(self.read, 6)
+        command = unpack('>B', data[0:1])[0]
+        status = unpack('>B', data[1:2])[0]
+        seq = APNs.unpacked_uint_big_endian(data[2:6])
+        callback(status, seq)
