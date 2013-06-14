@@ -28,6 +28,7 @@ from datetime import datetime
 import time
 from socket import socket, AF_INET, SOCK_STREAM
 from struct import pack, unpack
+import functools
 
 try:
     from ssl import wrap_socket
@@ -131,7 +132,7 @@ class APNsConnection(object):
     def is_alive(self):
         return self._alive
 
-    def connect(self):
+    def connect(self, callback):
         # Establish an SSL connection
         if not self._connecting:
             self._connecting = True
@@ -140,36 +141,38 @@ class APNsConnection(object):
                     self._connecting_timeout_callback)
             self._socket = socket(AF_INET, SOCK_STREAM)
             self._stream = iostream.SSLIOStream(socket=self._socket, ssl_options={"keyfile": self.key_file, "certfile": self.cert_file})
-            self._stream.connect((self.server, self.port), self._on_connected)
+            self._stream.connect((self.server, self.port),
+                    functools.partial(self._on_connected, callback))
 
     def _connecting_timeout_callback(self):
         if not self._alive:
             self._connecting = False
             self._disconnect()
 
-    def _on_connected(self):
+    def _on_connected(self, callback):
         ioloop.IOLoop.instance().remove_timeout(self._connect_timeout)
         self._alive = True
         self._connecting = False
+        callback()
 
     def _disconnect(self):
+        self._alive = False
         if self._socket:
-            self._alive = False
             self._socket.close()
 
     def read(self, n, callback):
         try:
             self._stream.read(n, callback)
-        except AttributeError as e:
-            self._alive = False
-            raise e
+        except (AttributeError, IOError) as e:
+            self._disconnect()
+            raise ConnectionError('%s' % e)
 
     def write(self, string, callback):
         try:
             self._stream.write(string, callback)
-        except AttributeError as e:
-            self._alive = False
-            raise e
+        except (AttributeError, IOError) as e:
+            self._disconnect()
+            raise ConnectionError('%s' % e)
 
 
 class PayloadAlert(object):
