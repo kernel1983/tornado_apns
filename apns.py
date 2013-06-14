@@ -320,7 +320,7 @@ class GatewayConnection(APNsConnection):
             'gateway.sandbox.push.apple.com')[use_sandbox]
         self.port = 2195
 
-    def _get_notification(self, token_hex, payload):
+    def _get_notification(self, identifier, expiry, token_hex, payload):
         """
         Takes a token as a hex string and a payload as a Python dict and sends
         the notification
@@ -330,15 +330,17 @@ class GatewayConnection(APNsConnection):
         except TypeError as e:
             raise TokenLengthOddError("Token Length is Odd")
         token_length_bin = APNs.packed_ushort_big_endian(len(token_bin))
+        identifier_bin = APNs.packed_uint_big_endian(identifier)
+        expiry = APNs.packed_uint_big_endian(expiry)
         payload_json = payload.json()
         payload_length_bin = APNs.packed_ushort_big_endian(len(payload_json))
 
-        notification = ('\0' + token_length_bin + token_bin
+        notification = ('\1' + identifier_bin + expiry + token_length_bin + token_bin
             + payload_length_bin + payload_json)
 
         return notification
 
-    def send_notification(self, token_hex, payload, callback):
+    def send_notification(self, identifier, expiry, token_hex, payload, callback):
         self.write(self._get_notification(token_hex, payload), callback)
 
     def send_notification_json(self, identifier, expiry, token_hex, payload, callback):
@@ -360,6 +362,9 @@ class GatewayConnection(APNsConnection):
     
     @gen.engine
     def receive_response(self, callback):
+        '''
+        receive the error response, return the error status and seq id
+        '''
         data = yield gen.Task(self.read, 6)
         command = unpack('>B', data[0:1])[0]
         status = unpack('>B', data[1:2])[0]
