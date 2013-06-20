@@ -339,7 +339,7 @@ class GatewayConnection(APNsConnection):
         return notification
 
     def send_notification(self, identifier, expiry, token_hex, payload, callback):
-        self.write(self._get_notification(token_hex, payload), callback)
+        self.write(self._get_notification(identifier, expiry, token_hex, payload), callback)
 
     def send_notification_json(self, identifier, expiry, token_hex, payload, callback):
         
@@ -355,7 +355,6 @@ class GatewayConnection(APNsConnection):
         
         notification = ('\1' + identifier_bin + expiry + token_length_bin + token_bin
             + payload_length_bin + payload_json)
-
         self.write(notification, callback)
     
     @gen.engine
