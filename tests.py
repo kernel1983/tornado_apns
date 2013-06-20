@@ -71,6 +71,8 @@ class TestAPNs(unittest.TestCase):
         self.assertEqual(gateway_server.cert_file, apns.cert_file)
         self.assertEqual(gateway_server.key_file, apns.key_file)
 
+        identifier = 1
+        expiry = 3600
         token_hex = 'b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c'
         payload   = Payload(
             alert = "Hello World!",
@@ -81,6 +83,8 @@ class TestAPNs(unittest.TestCase):
 
         expected_length = (
             1                       # leading null byte
+            + 4                     # length of identifier as a packed ushort
+            + 4                     # length of expiry time as a packed ushort
             + 2                     # length of token as a packed short
             + len(token_hex) / 2    # length of token as binary string
             + 2                     # length of payload as a packed short
@@ -88,7 +92,7 @@ class TestAPNs(unittest.TestCase):
         )
 
         self.assertEqual(len(notification), expected_length)
-        self.assertEqual(notification[0], '\0')
+        self.assertEqual(notification[0], '\1')
 
     def testFeedbackServer(self):
         pem_file = TEST_CERTIFICATE

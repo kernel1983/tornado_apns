@@ -25,8 +25,10 @@
 
 from binascii import a2b_hex, b2a_hex
 from datetime import datetime
+import time
 from socket import socket, AF_INET, SOCK_STREAM
 from struct import pack, unpack
+import functools
 
 try:
     from ssl import wrap_socket
@@ -39,8 +41,10 @@ except ImportError:
     import simplejson as json
 
 from tornado import iostream
+from tornado import ioloop
 
 MAX_PAYLOAD_LENGTH = 256
+TIME_OUT = 20
 
 class APNs(object):
     """A class representing an Apple Push Notification service connection"""
@@ -118,25 +122,60 @@ class APNsConnection(object):
         self._socket = None
         self._ssl = None
         self._stream = None
+        self._alive = False
+        self._connecting = False
+        self._connect_timeout = None
 
     def __del__(self):
         self._disconnect();
+    
+    def is_alive(self):
+        return self._alive
+
+    def is_connecting(self):
+        return self._connecting
 
     def connect(self, callback):
         # Establish an SSL connection
-        self._socket = socket(AF_INET, SOCK_STREAM)
-        self._stream = iostream.SSLIOStream(socket=self._socket, ssl_options={"keyfile": self.key_file, "certfile": self.cert_file})
-        self._stream.connect((self.server, self.port), callback)
+        if not self._connecting:
+            self._connecting = True
+            _ioloop = ioloop.IOLoop.instance()
+            self._connect_timeout = _ioloop.add_timeout(time.time()+TIME_OUT,
+                    self._connecting_timeout_callback)
+            self._socket = socket(AF_INET, SOCK_STREAM)
+            self._stream = iostream.SSLIOStream(socket=self._socket, ssl_options={"keyfile": self.key_file, "certfile": self.cert_file})
+            self._stream.connect((self.server, self.port),
+                    functools.partial(self._on_connected, callback))
+
+    def _connecting_timeout_callback(self):
+        if not self._alive:
+            self._connecting = False
+            self._disconnect()
+
+    def _on_connected(self, callback):
+        ioloop.IOLoop.instance().remove_timeout(self._connect_timeout)
+        self._alive = True
+        self._connecting = False
+        callback()
 
     def _disconnect(self):
+        self._alive = False
         if self._socket:
             self._socket.close()
 
     def read(self, n, callback):
-        return self._stream.read(n, callback)
+        try:
+            self._stream.read_bytes(n, callback)
+        except (AttributeError, IOError) as e:
+            self._disconnect()
+            raise ConnectionError('%s' % e)
 
     def write(self, string, callback):
-        return self._stream.write(string, callback)
+        try:
+            self._stream.write(string, callback)
+        except (AttributeError, IOError) as e:
+            self._disconnect()
+            raise ConnectionError('%s' % e)
 
 
 class PayloadAlert(object):
@@ -164,6 +203,12 @@ class PayloadAlert(object):
 class PayloadTooLargeError(Exception):
     def __init__(self):
         super(PayloadTooLargeError, self).__init__()
+
+class TokenLengthOddError(Exception):
+    pass
+
+class ConnectionError(Exception):
+    pass
 
 class Payload(object):
     """A class representing an APNs message payload"""
@@ -272,21 +317,60 @@ class GatewayConnection(APNsConnection):
             'gateway.sandbox.push.apple.com')[use_sandbox]
         self.port = 2195
 
-    def _get_notification(self, token_hex, payload):
+    def _get_notification(self, identifier, expiry, token_hex, payload):
         """
         Takes a token as a hex string and a payload as a Python dict and sends
         the notification
         """
-        token_bin = a2b_hex(token_hex)
+        try:
+            token_bin = a2b_hex(token_hex)
+        except TypeError as e:
+            raise TokenLengthOddError("Token Length is Odd")
         token_length_bin = APNs.packed_ushort_big_endian(len(token_bin))
+        identifier_bin = APNs.packed_uint_big_endian(identifier)
+        expiry = APNs.packed_uint_big_endian(expiry)
         payload_json = payload.json()
         payload_length_bin = APNs.packed_ushort_big_endian(len(payload_json))
 
-        notification = ('\0' + token_length_bin + token_bin
+        notification = ('\1' + identifier_bin + expiry + token_length_bin + token_bin
             + payload_length_bin + payload_json)
 
         return notification
+    
+    def connect_and_response(self, callback):
+        '''
+        connect the apns service and register the receive_response callback
+        '''
 
-    def send_notification(self, token_hex, payload, callback):
-        self.write(self._get_notification(token_hex, payload), callback)
+        self.connect(functools.partial(self.receive_response, callback))
 
+    def send_notification(self, identifier, expiry, token_hex, payload, callback):
+        self.write(self._get_notification(identifier, expiry, token_hex, payload), callback)
+
+    def send_notification_json(self, identifier, expiry, token_hex, payload, callback):
+        
+        try:
+            token_bin = a2b_hex(token_hex)
+        except TypeError as e:
+            raise TokenLengthOddError("Token Length is Odd")
+        token_length_bin = APNs.packed_ushort_big_endian(len(token_bin))
+        identifier_bin = APNs.packed_uint_big_endian(identifier)
+        expiry = APNs.packed_uint_big_endian(expiry)
+        payload_json = payload
+        payload_length_bin = APNs.packed_ushort_big_endian(len(payload_json))
+        
+        notification = ('\1' + identifier_bin + expiry + token_length_bin + token_bin
+            + payload_length_bin + payload_json)
+        self.write(notification, callback)
+    
+    def receive_response(self, callback):
+        '''
+        receive the error response, return the error status and seq id
+        '''
+        def _read_response_call(callback, data):
+            command = unpack('>B', data[0:1])[0]
+            status = unpack('>B', data[1:2])[0]
+            seq = APNs.unpacked_uint_big_endian(data[2:6])
+            callback(status, seq)
+
+        self.read(6, functools.partial(_read_response_call,callback))
