@@ -42,7 +42,6 @@ except ImportError:
 
 from tornado import iostream
 from tornado import ioloop
-from tornado import gen
 
 MAX_PAYLOAD_LENGTH = 256
 TIME_OUT = 20
@@ -337,6 +336,13 @@ class GatewayConnection(APNsConnection):
             + payload_length_bin + payload_json)
 
         return notification
+    
+    def connect_and_response(self, callback):
+        '''
+        connect the apns service and register the receive_response callback
+        '''
+
+        self.connect(functools.partial(self.receive_response, callback))
 
     def send_notification(self, identifier, expiry, token_hex, payload, callback):
         self.write(self._get_notification(identifier, expiry, token_hex, payload), callback)
@@ -357,13 +363,14 @@ class GatewayConnection(APNsConnection):
             + payload_length_bin + payload_json)
         self.write(notification, callback)
     
-    @gen.engine
     def receive_response(self, callback):
         '''
         receive the error response, return the error status and seq id
         '''
-        data = yield gen.Task(self.read, 6)
-        command = unpack('>B', data[0:1])[0]
-        status = unpack('>B', data[1:2])[0]
-        seq = APNs.unpacked_uint_big_endian(data[2:6])
-        callback(status, seq)
+        def _read_response_call(callback, data):
+            command = unpack('>B', data[0:1])[0]
+            status = unpack('>B', data[1:2])[0]
+            seq = APNs.unpacked_uint_big_endian(data[2:6])
+            callback(status, seq)
+
+        self.read(6, functools.partial(_read_response_call,callback))

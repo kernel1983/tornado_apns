@@ -51,11 +51,8 @@ def send():
 def response(status, seq):
     print "error message status %s seq %d" % (status, seq)
 
-def receive():
-    apns.gateway_server.receive_response(response)
-
 # Send a notification
 payload = Payload(alert=options.message, sound="default", badge=1)
-apns.gateway_server.connect(receive)
+apns.gateway_server.connect_and_response(response)
 ioloop.IOLoop.instance().add_timeout(time.time()+5, send)
 ioloop.IOLoop.instance().start()
