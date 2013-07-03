@@ -127,7 +127,7 @@ class APNsConnection(object):
         self._connect_timeout = None
 
     def __del__(self):
-        self._disconnect();
+        self._disconnect()
     
     def is_alive(self):
         return self._alive
@@ -266,14 +266,12 @@ class FeedbackConnection(APNsConnection):
             'feedback.push.apple.com',
             'feedback.sandbox.push.apple.com')[use_sandbox]
         self.port = 2196
+        self.buff =''
 
     def receive_feedback(self, callback):
         self.read_till_close(functools.partial(self._feedback_callback, callback))
 
     def _feedback_callback(self, callback, data):
-
-        if not data:
-            self._disconnect()
 
         self.buff += data
 
@@ -283,7 +281,7 @@ class FeedbackConnection(APNsConnection):
         while len(self.buff) > 6:
             token_length = APNs.unpacked_ushort_big_endian(self.buff[4:6])
             bytes_to_read = 6 + token_length
-            if len(buff) >= bytes_to_read:
+            if len(self.buff) >= bytes_to_read:
                 fail_time_unix = APNs.unpacked_uint_big_endian(self.buff[0:4])
                 fail_time = datetime.utcfromtimestamp(fail_time_unix)
                 token = b2a_hex(self.buff[6:bytes_to_read])
