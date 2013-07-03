@@ -62,6 +62,20 @@ class APNs(object):
         self._gateway_connection = None
 
     @staticmethod
+    def packed_uchar(num):
+        """
+        Returns an unsigned char in packed form
+        """
+        return pack('>B', num)
+
+    @staticmethod
+    def unpacked_uchar(bytes):
+        """
+        Returns an unsigned char from a packed (network) byte
+        """
+        return unpack('>B', bytes)[0]
+
+    @staticmethod
     def packed_ushort_big_endian(num):
         """
         Returns an unsigned short in packed big-endian (network) form
@@ -122,15 +136,14 @@ class APNsConnection(object):
         self._socket = None
         self._ssl = None
         self._stream = None
-        self._alive = False
         self._connecting = False
         self._connect_timeout = None
 
     def __del__(self):
-        self._disconnect();
+        self._disconnect()
     
     def is_alive(self):
-        return self._alive
+        return not self._socket is None
 
     def is_connecting(self):
         return self._connecting
@@ -148,18 +161,16 @@ class APNsConnection(object):
                     functools.partial(self._on_connected, callback))
 
     def _connecting_timeout_callback(self):
-        if not self._alive:
+        if not self.is_alive():
             self._connecting = False
             self._disconnect()
 
     def _on_connected(self, callback):
         ioloop.IOLoop.instance().remove_timeout(self._connect_timeout)
-        self._alive = True
         self._connecting = False
         callback()
 
     def _disconnect(self):
-        self._alive = False
         if self._socket:
             self._socket.close()
 
@@ -169,6 +180,9 @@ class APNsConnection(object):
         except (AttributeError, IOError) as e:
             self._disconnect()
             raise ConnectionError('%s' % e)
+
+    def read_till_close(self, callback):
+        return self._stream.read_until_close(callback=callback, streaming_callback=callback)
 
     def write(self, string, callback):
         try:
@@ -262,50 +276,36 @@ class FeedbackConnection(APNsConnection):
             'feedback.push.apple.com',
             'feedback.sandbox.push.apple.com')[use_sandbox]
         self.port = 2196
+        self.buff =''
 
-    def _chunks(self):
-        BUF_SIZE = 4096
-        while 1:
-            data = self.read(BUF_SIZE)
-            yield data
-            if not data:
-                break
+    def receive_feedback(self, callback):
+        self.read_till_close(functools.partial(self._feedback_callback, callback))
 
-    def items(self):
-        """
-        A generator that yields (token_hex, fail_time) pairs retrieved from
-        the APNs feedback server
-        """
-        buff = ''
-        for chunk in self._chunks():
-            buff += chunk
+    def set_feedback_close_callback(self, callback):
+        self._stream.set_close_callback(callback)
 
-            # Quit if there's no more data to read
-            if not buff:
-                break
+    def _feedback_callback(self, callback, data):
 
-            # Sanity check: after a socket read we should always have at least
-            # 6 bytes in the buffer
-            if len(buff) < 6:
-                break
+        self.buff += data
 
-            while len(buff) > 6:
-                token_length = APNs.unpacked_ushort_big_endian(buff[4:6])
-                bytes_to_read = 6 + token_length
-                if len(buff) >= bytes_to_read:
-                    fail_time_unix = APNs.unpacked_uint_big_endian(buff[0:4])
-                    fail_time = datetime.utcfromtimestamp(fail_time_unix)
-                    token = b2a_hex(buff[6:bytes_to_read])
+        if len(self.buff) < 6:
+            return
 
-                    yield (token, fail_time)
+        while len(self.buff) > 6:
+            token_length = APNs.unpacked_ushort_big_endian(self.buff[4:6])
+            bytes_to_read = 6 + token_length
+            if len(self.buff) >= bytes_to_read:
+                fail_time_unix = APNs.unpacked_uint_big_endian(self.buff[0:4])
+                fail_time = datetime.utcfromtimestamp(fail_time_unix)
+                token = b2a_hex(self.buff[6:bytes_to_read])
 
-                    # Remove data for current token from buffer
-                    buff = buff[bytes_to_read:]
-                else:
-                    # break out of inner while loop - i.e. go and fetch
-                    # some more data and append to buffer
-                    break
+                callback(token, fail_time)
 
+                # Remove data for current token from buffer
+                self.buff = self.buff[bytes_to_read:]
+            else:
+                return
+ 
 class GatewayConnection(APNsConnection):
     """
     A class that represents a connection to the APNs gateway server
@@ -368,8 +368,8 @@ class GatewayConnection(APNsConnection):
         receive the error response, return the error status and seq id
         '''
         def _read_response_call(callback, data):
-            command = unpack('>B', data[0:1])[0]
-            status = unpack('>B', data[1:2])[0]
+            command = APNs.unpacked_uchar(data[0])
+            status = APNs.unpacked_uchar(data[1])
             seq = APNs.unpacked_uint_big_endian(data[2:6])
             callback(status, seq)
 
