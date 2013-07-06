@@ -136,6 +136,7 @@ class APNsConnection(object):
         self._socket = None
         self._ssl = None
         self._stream = None
+        self._alive = False
         self._connecting = False
         self._connect_timeout = None
 
@@ -143,7 +144,7 @@ class APNsConnection(object):
         self._disconnect()
     
     def is_alive(self):
-        return not self._socket is None
+        return self._alive
 
     def is_connecting(self):
         return self._connecting
@@ -167,10 +168,12 @@ class APNsConnection(object):
 
     def _on_connected(self, callback):
         ioloop.IOLoop.instance().remove_timeout(self._connect_timeout)
+        self._alive = True
         self._connecting = False
         callback()
 
     def _disconnect(self):
+        self._alive = False
         if self._socket:
             self._socket.close()
 
@@ -182,7 +185,11 @@ class APNsConnection(object):
             raise ConnectionError('%s' % e)
 
     def read_till_close(self, callback):
-        return self._stream.read_until_close(callback=callback, streaming_callback=callback)
+        try:
+            self._stream.read_until_close(callback=callback, streaming_callback=callback)
+        except (AttributeError, IOError) as e:
+            self._disconnect()
+            raise ConnectionError('%s' % e)
 
     def write(self, string, callback):
         try:
