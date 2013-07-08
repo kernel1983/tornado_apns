@@ -336,7 +336,10 @@ class GatewayConnection(APNsConnection):
         token_length_bin = APNs.packed_ushort_big_endian(len(token_bin))
         identifier_bin = APNs.packed_uint_big_endian(identifier)
         expiry = APNs.packed_uint_big_endian(expiry)
-        payload_json = payload.json()
+        if isinstance(payload, Payload):
+            payload_json = payload.json()
+        else:
+            payload_json = payload
         payload_length_bin = APNs.packed_ushort_big_endian(len(payload_json))
 
         notification = ('\1' + identifier_bin + expiry + token_length_bin + token_bin
@@ -344,32 +347,9 @@ class GatewayConnection(APNsConnection):
 
         return notification
     
-    def connect_and_response(self, callback):
-        '''
-        connect the apns service and register the receive_response callback
-        '''
-
-        self.connect(functools.partial(self.receive_response, callback))
-
     def send_notification(self, identifier, expiry, token_hex, payload, callback):
         self.write(self._get_notification(identifier, expiry, token_hex, payload), callback)
 
-    def send_notification_json(self, identifier, expiry, token_hex, payload, callback):
-        
-        try:
-            token_bin = a2b_hex(token_hex)
-        except TypeError as e:
-            raise TokenLengthOddError("Token Length is Odd")
-        token_length_bin = APNs.packed_ushort_big_endian(len(token_bin))
-        identifier_bin = APNs.packed_uint_big_endian(identifier)
-        expiry = APNs.packed_uint_big_endian(expiry)
-        payload_json = payload
-        payload_length_bin = APNs.packed_ushort_big_endian(len(payload_json))
-        
-        notification = ('\1' + identifier_bin + expiry + token_length_bin + token_bin
-            + payload_length_bin + payload_json)
-        self.write(notification, callback)
-    
     def receive_response(self, callback):
         '''
         receive the error response, return the error status and seq id
