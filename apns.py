@@ -165,6 +165,7 @@ class APNsConnection(object):
         if not self.is_alive():
             self._connecting = False
             self._disconnect()
+            raise ConnectionError('connect timeout')
 
     def _on_connected(self, callback):
         ioloop.IOLoop.instance().remove_timeout(self._connect_timeout)
@@ -174,8 +175,10 @@ class APNsConnection(object):
 
     def _disconnect(self):
         self._alive = False
-        if self._socket:
-            self._socket.close()
+        self._stream.close()
+
+    def set_close_callback(self, callback):
+        self._stream.set_close_callback(callback)
 
     def read(self, n, callback):
         try:
@@ -287,9 +290,6 @@ class FeedbackConnection(APNsConnection):
 
     def receive_feedback(self, callback):
         self.read_till_close(functools.partial(self._feedback_callback, callback))
-
-    def set_feedback_close_callback(self, callback):
-        self._stream.set_close_callback(callback)
 
     def _feedback_callback(self, callback, data):
 
