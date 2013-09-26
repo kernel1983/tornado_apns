@@ -141,7 +141,7 @@ class APNsConnection(object):
         self._connect_timeout = None
 
     def __del__(self):
-        self._disconnect()
+        self.disconnect()
     
     def is_alive(self):
         return self._alive
@@ -164,7 +164,7 @@ class APNsConnection(object):
     def _connecting_timeout_callback(self):
         if not self.is_alive():
             self._connecting = False
-            self._disconnect()
+            self.disconnect()
             raise ConnectionError('connect timeout')
 
     def _on_connected(self, callback):
@@ -173,7 +173,7 @@ class APNsConnection(object):
         self._connecting = False
         callback()
 
-    def _disconnect(self):
+    def disconnect(self):
         self._alive = False
         self._stream.close()
 
@@ -184,21 +184,21 @@ class APNsConnection(object):
         try:
             self._stream.read_bytes(n, callback)
         except (AttributeError, IOError) as e:
-            self._disconnect()
+            self.disconnect()
             raise ConnectionError('%s' % e)
 
     def read_till_close(self, callback):
         try:
             self._stream.read_until_close(callback=callback, streaming_callback=callback)
         except (AttributeError, IOError) as e:
-            self._disconnect()
+            self.disconnect()
             raise ConnectionError('%s' % e)
 
     def write(self, string, callback):
         try:
             self._stream.write(string, callback)
         except (AttributeError, IOError) as e:
-            self._disconnect()
+            self.disconnect()
             raise ConnectionError('%s' % e)
 
 
