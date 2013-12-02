@@ -141,7 +141,8 @@ class APNsConnection(object):
         self._connect_timeout = None
 
     def __del__(self):
-        self.disconnect()
+        if self._stream:
+            self._stream.close()
     
     def is_alive(self):
         return self._alive
@@ -288,6 +289,9 @@ class FeedbackConnection(APNsConnection):
         self.port = 2196
         self.buff =''
 
+    def __del__(self):
+        super(FeedbackConnection, self).__del__()
+
     def receive_feedback(self, callback):
         self.read_till_close(functools.partial(self._feedback_callback, callback))
 
@@ -323,6 +327,9 @@ class GatewayConnection(APNsConnection):
             'gateway.push.apple.com',
             'gateway.sandbox.push.apple.com')[use_sandbox]
         self.port = 2195
+
+    def __del__(self):
+        super(GatewayConnection, self).__del__()
 
     def _get_notification(self, identifier, expiry, token_hex, payload):
         """
