@@ -16,12 +16,21 @@ def success():
     ioloop.IOLoop.instance().stop()
 
 def send():
+    token_hex = 'b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b87'
     payload = Payload(alert="Hello World!", sound="default", badge=1)
-    apns.gateway_server.send_notification(options.push_token, payload, success)
+    apns.gateway_server.send_notification(token_hex, payload, success)
 
-# Send a notification
-token_hex = 'b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b87'
-apns.gateway_server.connect(send)
+def on_response(status, seq):
+    print "sent push message to APNS gateway error status %s seq %s" % (status, seq) 
+
+def on_connected():
+    apns.gateway_server.receive_response(on_response) 
+
+# Connect the apns
+apns.gateway_server.connect(on_connected)
+
+# Wait for the connection and send a notification
+ioloop.IOLoop.instance().add_timeout(time.time()+5, send)
 
 ioloop.IOLoop.instance().start()
 ```
