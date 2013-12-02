@@ -11,28 +11,6 @@ import unittest
 
 TEST_CERTIFICATE = "certificate.pem" # replace with path to test certificate
 
-NUM_MOCK_TOKENS = 10
-mock_tokens = []
-for i in range(0, NUM_MOCK_TOKENS):
-    mock_tokens.append(hashlib.sha256("%.12f" % random()).hexdigest())
-
-def mock_chunks_generator():
-    BUF_SIZE = 64
-    # Create fake data feed
-    data = ''
-
-    for t in mock_tokens:
-        token_bin       = a2b_hex(t)
-        token_length    = len(token_bin)
-
-        data += APNs.packed_uint_big_endian(int(time.time()))
-        data += APNs.packed_ushort_big_endian(token_length)
-        data += token_bin
-
-    while data:
-        yield data[0:BUF_SIZE]
-        data = data[BUF_SIZE:]
-
 
 class TestAPNs(unittest.TestCase):
     """Unit tests for PyAPNs"""
@@ -71,16 +49,20 @@ class TestAPNs(unittest.TestCase):
         self.assertEqual(gateway_server.cert_file, apns.cert_file)
         self.assertEqual(gateway_server.key_file, apns.key_file)
 
+        identifier = 1
+        expiry = 3600
         token_hex = 'b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c'
         payload   = Payload(
             alert = "Hello World!",
             sound = "default",
             badge = 4
         )
-        notification = gateway_server._get_notification(token_hex, payload)
+        notification = gateway_server._get_notification(identifier, expiry, token_hex, payload)
 
         expected_length = (
             1                       # leading null byte
+            + 4                     # length of identifier as a packed ushort
+            + 4                     # length of expiry time as a packed ushort
             + 2                     # length of token as a packed short
             + len(token_hex) / 2    # length of token as binary string
             + 2                     # length of payload as a packed short
@@ -88,7 +70,7 @@ class TestAPNs(unittest.TestCase):
         )
 
         self.assertEqual(len(notification), expected_length)
-        self.assertEqual(notification[0], '\0')
+        self.assertEqual(notification[0], '\1')
 
     def testFeedbackServer(self):
         pem_file = TEST_CERTIFICATE
@@ -97,15 +79,21 @@ class TestAPNs(unittest.TestCase):
 
         self.assertEqual(feedback_server.cert_file, apns.cert_file)
         self.assertEqual(feedback_server.key_file, apns.key_file)
+        
+        token_hex = hashlib.sha256("%.12f" % random()).hexdigest()
+        token_bin       = a2b_hex(token_hex)
+        token_length    = len(token_bin)
+        now_time = int(time.time())
+        data = ''
+        data += APNs.packed_uint_big_endian(now_time)
+        data += APNs.packed_ushort_big_endian(token_length)
+        data += token_bin
 
-        # Overwrite _chunks() to call a mock chunk generator
-        feedback_server._chunks = mock_chunks_generator
+        def test_callback(token, fail_time):
+            self.assertEqual(token, token_hex)
+            self.assertEqual(fail_time, now_time)
 
-        i = 0;
-        for (token_hex, fail_time) in feedback_server.items():
-            self.assertEqual(token_hex, mock_tokens[i])
-            i += 1
-        self.assertEqual(i, NUM_MOCK_TOKENS)
+        feedback_server._feedback_callback(test_callback, data)
 
     def testPayloadAlert(self):
         pa = PayloadAlert('foo')

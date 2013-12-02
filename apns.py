@@ -24,9 +24,10 @@
 # SOFTWARE.
 
 from binascii import a2b_hex, b2a_hex
-from datetime import datetime
+import time
 from socket import socket, AF_INET, SOCK_STREAM
 from struct import pack, unpack
+import functools
 
 try:
     from ssl import wrap_socket
@@ -39,8 +40,10 @@ except ImportError:
     import simplejson as json
 
 from tornado import iostream
+from tornado import ioloop
 
 MAX_PAYLOAD_LENGTH = 256
+TIME_OUT = 20
 
 class APNs(object):
     """A class representing an Apple Push Notification service connection"""
@@ -56,6 +59,20 @@ class APNs(object):
         self.key_file = key_file
         self._feedback_connection = None
         self._gateway_connection = None
+
+    @staticmethod
+    def packed_uchar(num):
+        """
+        Returns an unsigned char in packed form
+        """
+        return pack('>B', num)
+
+    @staticmethod
+    def unpacked_uchar(bytes):
+        """
+        Returns an unsigned char from a packed (network) byte
+        """
+        return unpack('>B', bytes)[0]
 
     @staticmethod
     def packed_ushort_big_endian(num):
@@ -118,25 +135,71 @@ class APNsConnection(object):
         self._socket = None
         self._ssl = None
         self._stream = None
+        self._alive = False
+        self._connecting = False
+        self._connect_timeout = None
 
     def __del__(self):
-        self._disconnect();
+        if self._stream:
+            self._stream.close()
+    
+    def is_alive(self):
+        return self._alive
+
+    def is_connecting(self):
+        return self._connecting
 
     def connect(self, callback):
         # Establish an SSL connection
-        self._socket = socket(AF_INET, SOCK_STREAM)
-        self._stream = iostream.SSLIOStream(socket=self._socket, ssl_options={"keyfile": self.key_file, "certfile": self.cert_file})
-        self._stream.connect((self.server, self.port), callback)
+        if not self._connecting:
+            self._connecting = True
+            _ioloop = ioloop.IOLoop.instance()
+            self._connect_timeout = _ioloop.add_timeout(time.time()+TIME_OUT,
+                    self._connecting_timeout_callback)
+            self._socket = socket(AF_INET, SOCK_STREAM)
+            self._stream = iostream.SSLIOStream(socket=self._socket, ssl_options={"keyfile": self.key_file, "certfile": self.cert_file})
+            self._stream.connect((self.server, self.port),
+                    functools.partial(self._on_connected, callback))
 
-    def _disconnect(self):
-        if self._socket:
-            self._socket.close()
+    def _connecting_timeout_callback(self):
+        if not self.is_alive():
+            self._connecting = False
+            self.disconnect()
+            raise ConnectionError('connect timeout')
+
+    def _on_connected(self, callback):
+        ioloop.IOLoop.instance().remove_timeout(self._connect_timeout)
+        self._alive = True
+        self._connecting = False
+        callback()
+
+    def disconnect(self):
+        self._alive = False
+        self._stream.close()
+
+    def set_close_callback(self, callback):
+        self._stream.set_close_callback(callback)
 
     def read(self, n, callback):
-        return self._stream.read(n, callback)
+        try:
+            self._stream.read_bytes(n, callback)
+        except (AttributeError, IOError) as e:
+            self.disconnect()
+            raise ConnectionError('%s' % e)
+
+    def read_till_close(self, callback):
+        try:
+            self._stream.read_until_close(callback=callback, streaming_callback=callback)
+        except (AttributeError, IOError) as e:
+            self.disconnect()
+            raise ConnectionError('%s' % e)
 
     def write(self, string, callback):
-        return self._stream.write(string, callback)
+        try:
+            self._stream.write(string, callback)
+        except (AttributeError, IOError) as e:
+            self.disconnect()
+            raise ConnectionError('%s' % e)
 
 
 class PayloadAlert(object):
@@ -164,6 +227,12 @@ class PayloadAlert(object):
 class PayloadTooLargeError(Exception):
     def __init__(self):
         super(PayloadTooLargeError, self).__init__()
+
+class TokenLengthOddError(Exception):
+    pass
+
+class ConnectionError(Exception):
+    pass
 
 class Payload(object):
     """A class representing an APNs message payload"""
@@ -217,50 +286,35 @@ class FeedbackConnection(APNsConnection):
             'feedback.push.apple.com',
             'feedback.sandbox.push.apple.com')[use_sandbox]
         self.port = 2196
+        self.buff =''
 
-    def _chunks(self):
-        BUF_SIZE = 4096
-        while 1:
-            data = self.read(BUF_SIZE)
-            yield data
-            if not data:
-                break
+    def __del__(self):
+        super(FeedbackConnection, self).__del__()
 
-    def items(self):
-        """
-        A generator that yields (token_hex, fail_time) pairs retrieved from
-        the APNs feedback server
-        """
-        buff = ''
-        for chunk in self._chunks():
-            buff += chunk
+    def receive_feedback(self, callback):
+        self.read_till_close(functools.partial(self._feedback_callback, callback))
 
-            # Quit if there's no more data to read
-            if not buff:
-                break
+    def _feedback_callback(self, callback, data):
 
-            # Sanity check: after a socket read we should always have at least
-            # 6 bytes in the buffer
-            if len(buff) < 6:
-                break
+        self.buff += data
 
-            while len(buff) > 6:
-                token_length = APNs.unpacked_ushort_big_endian(buff[4:6])
-                bytes_to_read = 6 + token_length
-                if len(buff) >= bytes_to_read:
-                    fail_time_unix = APNs.unpacked_uint_big_endian(buff[0:4])
-                    fail_time = datetime.utcfromtimestamp(fail_time_unix)
-                    token = b2a_hex(buff[6:bytes_to_read])
+        if len(self.buff) < 6:
+            return
 
-                    yield (token, fail_time)
+        while len(self.buff) > 6:
+            token_length = APNs.unpacked_ushort_big_endian(self.buff[4:6])
+            bytes_to_read = 6 + token_length
+            if len(self.buff) >= bytes_to_read:
+                fail_time_unix = APNs.unpacked_uint_big_endian(self.buff[0:4])
+                token = b2a_hex(self.buff[6:bytes_to_read])
 
-                    # Remove data for current token from buffer
-                    buff = buff[bytes_to_read:]
-                else:
-                    # break out of inner while loop - i.e. go and fetch
-                    # some more data and append to buffer
-                    break
+                callback(token, fail_time_unix)
 
+                # Remove data for current token from buffer
+                self.buff = self.buff[bytes_to_read:]
+            else:
+                return
+ 
 class GatewayConnection(APNsConnection):
     """
     A class that represents a connection to the APNs gateway server
@@ -272,21 +326,43 @@ class GatewayConnection(APNsConnection):
             'gateway.sandbox.push.apple.com')[use_sandbox]
         self.port = 2195
 
-    def _get_notification(self, token_hex, payload):
+    def __del__(self):
+        super(GatewayConnection, self).__del__()
+
+    def _get_notification(self, identifier, expiry, token_hex, payload):
         """
         Takes a token as a hex string and a payload as a Python dict and sends
         the notification
         """
-        token_bin = a2b_hex(token_hex)
+        try:
+            token_bin = a2b_hex(token_hex)
+        except TypeError as e:
+            raise TokenLengthOddError("Token Length is Odd")
         token_length_bin = APNs.packed_ushort_big_endian(len(token_bin))
-        payload_json = payload.json()
+        identifier_bin = APNs.packed_uint_big_endian(identifier)
+        expiry = APNs.packed_uint_big_endian(expiry)
+        if isinstance(payload, Payload):
+            payload_json = payload.json()
+        else:
+            payload_json = payload
         payload_length_bin = APNs.packed_ushort_big_endian(len(payload_json))
 
-        notification = ('\0' + token_length_bin + token_bin
+        notification = ('\1' + identifier_bin + expiry + token_length_bin + token_bin
             + payload_length_bin + payload_json)
 
         return notification
+    
+    def send_notification(self, identifier, expiry, token_hex, payload, callback):
+        self.write(self._get_notification(identifier, expiry, token_hex, payload), callback)
 
-    def send_notification(self, token_hex, payload, callback):
-        self.write(self._get_notification(token_hex, payload), callback)
+    def receive_response(self, callback):
+        '''
+        receive the error response, return the error status and seq id
+        '''
+        def _read_response_call(callback, data):
+            command = APNs.unpacked_uchar(data[0])
+            status = APNs.unpacked_uchar(data[1])
+            seq = APNs.unpacked_uint_big_endian(data[2:6])
+            callback(status, seq)
 
+        self.read(6, functools.partial(_read_response_call,callback))
