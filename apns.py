@@ -24,7 +24,6 @@
 # SOFTWARE.
 
 from binascii import a2b_hex, b2a_hex
-from datetime import datetime
 import time
 from socket import socket, AF_INET, SOCK_STREAM
 from struct import pack, unpack
@@ -307,10 +306,9 @@ class FeedbackConnection(APNsConnection):
             bytes_to_read = 6 + token_length
             if len(self.buff) >= bytes_to_read:
                 fail_time_unix = APNs.unpacked_uint_big_endian(self.buff[0:4])
-                fail_time = datetime.utcfromtimestamp(fail_time_unix)
                 token = b2a_hex(self.buff[6:bytes_to_read])
 
-                callback(token, fail_time)
+                callback(token, fail_time_unix)
 
                 # Remove data for current token from buffer
                 self.buff = self.buff[bytes_to_read:]
