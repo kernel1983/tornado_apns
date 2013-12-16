@@ -241,11 +241,13 @@ class ConnectionError(Exception):
 
 class Payload(object):
     """A class representing an APNs message payload"""
-    def __init__(self, alert=None, badge=None, sound=None, custom={}):
+    def __init__(self, alert=None, badge=None, sound=None,
+            content_available=False, custom={}):
         super(Payload, self).__init__()
         self.alert = alert
         self.badge = badge
         self.sound = sound
+        self.content_available = content_available
         self.custom = custom
         self._check_size()
 
@@ -263,6 +265,8 @@ class Payload(object):
             d['sound'] = self.sound
         if self.badge is not None:
             d['badge'] = int(self.badge)
+        if self.content_available:
+            d.update({'content-available': 1})
 
         d = { 'aps': d }
         d.update(self.custom)
@@ -280,6 +284,49 @@ class Payload(object):
         args = ", ".join(["%s=%r" % (n, getattr(self, n)) for n in attrs])
         return "%s(%s)" % (self.__class__.__name__, args)
 
+class Frame(object):
+    """A class representing an APNs message frame for multiple sending"""
+    def __init__(self):
+        self.frame_data = bytearray()
+
+    def add_item(self, token_hex, payload, identifier, expiry, priority):
+        """Add a notification message to the frame"""
+        try:
+            token_bin = a2b_hex(token_hex)
+        except TypeError as e:
+            raise TokenLengthOddError("Token Length is Odd")
+        token_length_bin = APNs.packed_ushort_big_endian(len(token_bin))
+        token_item = '\1' + token_length_bin + token_bin
+        self.frame_data.extend(token_item)
+        
+        if isinstance(payload, Payload):
+            payload_json = payload.json()
+        else:
+            payload_json = payload
+        payload_length_bin = APNs.packed_ushort_big_endian(len(payload_json))
+        payload_item = '\2' + payload_length_bin + payload_json
+        self.frame_data.extend(payload_item)
+
+        identifier_bin = APNs.packed_uint_big_endian(identifier)
+        identifier_length_bin = \
+                APNs.packed_ushort_big_endian(len(identifier_bin))
+        identifier_item = '\3' + identifier_length_bin + identifier_bin
+        self.frame_data.extend(identifier_item)
+
+        expiry_bin = APNs.packed_uint_big_endian(expiry)
+        expiry_length_bin = APNs.packed_ushort_big_endian(len(expiry_bin))
+        expiry_item = '\4' + expiry_length_bin + expiry_bin
+        self.frame_data.extend(expiry_item)
+
+        priority_bin = APNs.packed_uchar(priority)
+        priority_length_bin = APNs.packed_ushort_big_endian(len(priority_bin))
+        priority_item = '\5' + priority_length_bin + priority_bin
+        self.frame_data.extend(priority_item)
+    
+    def get_frame(self):
+        """Get the frame buffer"""
+        return str('\2' + APNs.packed_uint_big_endian(len(self.frame_data)) +
+                self.frame_data)
 
 class FeedbackConnection(APNsConnection):
     """
@@ -359,6 +406,9 @@ class GatewayConnection(APNsConnection):
     
     def send_notification(self, identifier, expiry, token_hex, payload, callback):
         self.write(self._get_notification(identifier, expiry, token_hex, payload), callback)
+
+    def send_notification_multiple(self, frame, callback):
+        self.write(frame.get_frame(), callback)
 
     def receive_response(self, callback):
         '''
