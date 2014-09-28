@@ -42,7 +42,7 @@ except ImportError:
 from tornado import iostream
 from tornado import ioloop
 
-MAX_PAYLOAD_LENGTH = 256
+MAX_PAYLOAD_LENGTH = 2048
 TIME_OUT = 20
 
 class APNs(object):
