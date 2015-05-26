@@ -35,6 +35,14 @@ ioloop.IOLoop.instance().add_timeout(time.time()+5, send)
 ioloop.IOLoop.instance().start()
 ```
 
+To send multiple notifications in a single transmission, use the Frame class. Example:
+
+```python
+frame = Frame()
+frame.add_item('b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b87', payload, identifier, expiry, priority)
+apns.gateway_server.send_notification_multiple(frame, success)
+```
+
 For more complicated alerts including custom buttons etc, use the PayloadAlert 
 class. Example:
 
