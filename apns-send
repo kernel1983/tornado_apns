@@ -46,7 +46,7 @@ def success():
     ioloop.IOLoop.instance().stop()
 
 def send():
-    apns.gateway_server.send_notification(options.push_token, payload, success)
+    apns.gateway_server.send_notification(0, time.time()+5, options.push_token, payload, success)
 
 def on_response(status, seq):
     print "sent push message to APNS gateway error status %s seq %s" % (status, seq) 
