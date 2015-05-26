@@ -162,8 +162,8 @@ class APNsConnection(object):
                     functools.partial(self._on_connected, callback))
 
     def _connecting_timeout_callback(self):
+        self._connecting = False
         if not self.is_alive():
-            self._connecting = False
             self.disconnect()
             raise ConnectionError('connect timeout')
 
@@ -178,7 +178,12 @@ class APNsConnection(object):
         self._stream.close()
 
     def set_close_callback(self, callback):
-        self._stream.set_close_callback(callback)
+        self._stream_close_final_callback = callback
+        self._stream.set_close_callback(self._stream_close_callback)
+
+    def _stream_close_callback(self):
+        self._alive = False
+        self._stream_close_final_callback()
 
     def read(self, n, callback):
         try:
