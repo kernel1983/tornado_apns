@@ -1,9 +1,8 @@
 #!/usr/bin/env python
 
-from apns import APNs, Payload
+from apns import APNs
 
 import optparse
-import time
 
 from tornado import ioloop
 
@@ -25,11 +24,14 @@ if options.certificate_file is None:
 if options.key_file is None:
     parser.error('Must provide --key-file')
 
-apns = APNs(cert_file=options.certificate_file, key_file=options.key_file, use_sandbox=True)
+apns = APNs(cert_file=options.certificate_file, key_file=options.key_file,
+            use_sandbox=True)
+
 
 def success(token_hex, fail_time):
-    print("Get feedback data token:%s fail_time:%s" % \
-            (token_hex,fail_time))
+    print("Get feedback data token:%s fail_time:%s" %
+          (token_hex, fail_time))
+
 
 def receive():
     apns.feedback_server.receive_feedback(success)

@@ -39,20 +39,26 @@ if options.push_token is None:
 if options.message is None:
     parser.error('Must provide --message')
 
-apns = APNs(cert_file=options.certificate_file, key_file=options.key_file, use_sandbox=True)
+apns = APNs(cert_file=options.certificate_file, key_file=options.key_file,
+            use_sandbox=True)
+
 
 def success():
     print("Sent push message to APNS gateway.")
     ioloop.IOLoop.instance().stop()
 
+
 def send():
-    apns.gateway_server.send_notification(0, time.time()+5, options.push_token, payload, success)
+    apns.gateway_server.send_notification(0, time.time()+5, options.push_token,
+                                          payload, success)
+
 
 def on_response(status, seq):
-    print "sent push message to APNS gateway error status %s seq %s" % (status, seq) 
+    print "sent push message to APNS gateway error status %s seq %s" % (status, seq)
+
 
 def on_connected():
-    apns.gateway_server.receive_response(on_response) 
+    apns.gateway_server.receive_response(on_response)
 
 # Send a notification
 payload = Payload(alert=options.message, sound="default", badge=1)
